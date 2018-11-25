@@ -69,7 +69,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dockershell"
+name = "docker-bisect"
 version = "0.1.0"
 dependencies = [
  "dockworker 0.0.7",

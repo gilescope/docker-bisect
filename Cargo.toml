@@ -1,5 +1,5 @@
 [package]
-name = "dockershell"
+name = "docker-bisect"
 version = "0.1.0"
 authors = ["Giles Cope <gilescope@gmail.com>"]
 

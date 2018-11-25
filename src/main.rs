@@ -188,13 +188,6 @@ mod tests {
         });
 
         let res = results.unwrap();
-        
-       // assert_eq!(res.len(), 2usize);
-        for r in &res {
-            println!("ok {}", r);
-        }
-
-        println!("");
 
         assert_eq!(res, vec![
             Transition {
@@ -204,6 +197,46 @@ mod tests {
             Transition {
                 before: Some(LayerResult { layer: lay("3"), result: "B".to_string() }),
                 after: LayerResult { layer: lay("4"), result: "C".to_string() },
+            }
+        ]);
+    }
+
+
+    #[test]
+    fn three_transitions() {
+        let counter = std::rc::Rc::new(Box::new(0u32));
+
+        let results = get_changes(vec![lay("1"), lay("2"), lay("3"), lay("4")
+                                       , lay("5"), lay("6"), lay("7"), lay("8"), lay("9"), lay("10")
+        ], &|x|{
+            match x {
+                "1" => "A".to_string(),
+                "2" => "B".to_string(),
+                "3" => "B".to_string(),
+                "4" => "C".to_string(),
+                "5" => "C".to_string(),
+                "6" => "C".to_string(),
+                "7" => "C".to_string(),
+                "8" => "C".to_string(),
+                "9" => "D".to_string(),
+                "10" => "D".to_string(),
+                _ => panic!("unhandled {}", x)
+            } });
+
+        let res = results.unwrap();
+
+        assert_eq!(res, vec![
+            Transition {
+                before: Some(LayerResult { layer: lay("1"), result: "A".to_string() }),
+                after: LayerResult { layer: lay("2"), result: "B".to_string() },
+            },
+            Transition {
+                before: Some(LayerResult { layer: lay("3"), result: "B".to_string() }),
+                after: LayerResult { layer: lay("4"), result: "C".to_string() },
+            },
+            Transition {
+                before: Some(LayerResult { layer: lay("8"), result: "C".to_string() }),
+                after: LayerResult { layer: lay("9"), result: "D".to_string() },
             }
         ]);
     }
@@ -326,7 +359,6 @@ fn try_do(command_line: Vec<String>) -> Result<(), Error> {
             }
         }
     }
-    //  });
 
 
     let f = File::open("/Users/gilescope/private/strat2/strategy-runner-py/Dockerfile")?;
