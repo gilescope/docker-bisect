@@ -29,12 +29,13 @@ fn main() {
 
             for transition in transitions {
                 if is_first {
+                    is_first = false;
                     if let Some(before) = transition.before {
-                        println!("{} -- {}", before.result, truncate(
+                        println!("{} \n {}\n", before.result, truncate(
                             &before.layer.creation_command, 100));
                     }
                 }
-                println!("{} -- {}", transition.after.result, truncate(
+                println!("{} \n {}\n", transition.after.result, truncate(
                     &transition.after.layer.creation_command, 100));
             }
         }
@@ -122,7 +123,10 @@ fn bisect(history: &[Layer], start: &LayerResult, end: &LayerResult, action: &Fn
     }
 
     let half = size / 2;
-    let mid_result = LayerResult { layer: history[half].clone(), result: action(&history[half].image_name) };
+    let mid_result = LayerResult {
+        layer: history[half].clone(),
+        result: action(&history[half].image_name)
+    };
 
     if size == 1 {
         let mut results = Vec::<Transition>::new();
@@ -146,13 +150,13 @@ fn bisect(history: &[Layer], start: &LayerResult, end: &LayerResult, action: &Fn
     }
 
     if start.result == mid_result.result
-        {
-            return bisect(&history[half + 1..], &mid_result, &end, &action);
-        }
+    {
+        return bisect(&history[half + 1..], &mid_result, &end, &action);
+    }
     if mid_result.result == end.result
-        {
-            return bisect(&history[..half], &start, &mid_result, &action);
-        }
+    {
+        return bisect(&history[..half], &start, &mid_result, &action);
+    }
 
     let left = bisect(&history[..half], &start, &mid_result, &action).unwrap();
     let right = bisect(&history[half + 1..], &mid_result, &end, &action).unwrap();
@@ -166,54 +170,54 @@ fn try_do(image_name: &str, command_line: &Vec<String>) -> Result<Vec<Transition
     let docker = Docker::connect_with_defaults().unwrap();
 
     let create_and_try_container = |container_id: &str| -> String
-        {
-            println!(".");
-            let timeout_in_seconds = 2u64;
-            //Remove any existing container with same name...
-            let container_name = String::from("AA") + &(std::time::SystemTime::now().elapsed().unwrap()).as_secs().to_string();
-            //println!("CONT name : {}", &container_name);
-            let _result = docker.remove_container(&container_name, None, Some(true), None);
+    {
+        println!(".");
+        let timeout_in_seconds = 2u64;
+        //Remove any existing container with same name...
+        let container_name = String::from("AA");
+        //println!("CONT name : {}", &container_name);
+        let _result = docker.remove_container(&container_name, None, Some(true), None);
 
-            //Create container
-            let mut create = ContainerCreateOptions::new(&container_id);
-            let mut host_config = ContainerHostConfig::new();
-            host_config.auto_remove(false);
-            create.host_config(host_config);
-            let it = command_line.iter();
-            for command in it {
-                create.cmd(command.clone());
-            }
+        //Create container
+        let mut create = ContainerCreateOptions::new(&container_id);
+        let mut host_config = ContainerHostConfig::new();
+        host_config.auto_remove(false);
+        create.host_config(host_config);
+        let it = command_line.iter();
+        for command in it {
+            create.cmd(command.clone());
+        }
 
-            let container: CreateContainerResponse = docker.create_container(
-                Some(&container_name), &create).unwrap();
+        let container: CreateContainerResponse = docker.create_container(
+            Some(&container_name), &create).unwrap();
 
-            let result = docker.start_container(&container.id);
-            if result.is_err() {
-                let err: dockworker::errors::Error = result.unwrap_err();
+        let result = docker.start_container(&container.id);
+        if result.is_err() {
+            let err: dockworker::errors::Error = result.unwrap_err();
 
-                return format!("{}", err);
-            }
+            return format!("{}", err);
+        }
 
-            let log_options = ContainerLogOptions {
-                stdout: true,
-                stderr: true,
-                since: None,
-                timestamps: None,
-                tail: None,
-            };
-
-            std::thread::sleep(Duration::from_secs(timeout_in_seconds));
-
-            let mut container_output = String::new();
-
-            let result = docker.log_container_and_follow(&container_name, &log_options);
-            if let Ok(result) = result {
-                let mut line_reader = BufReader::new(result);
-                let _size = line_reader.read_to_string(&mut container_output);
-            }
-            let _stop_result = docker.stop_container(&container.id, Duration::from_secs(timeout_in_seconds));
-            container_output
+        let log_options = ContainerLogOptions {
+            stdout: true,
+            stderr: true,
+            since: None,
+            timestamps: None,
+            tail: None,
         };
+
+        std::thread::sleep(Duration::from_secs(timeout_in_seconds));
+
+        let mut container_output = String::new();
+
+        let result = docker.log_container_and_follow(&container_name, &log_options);
+        if let Ok(result) = result {
+            let mut line_reader = BufReader::new(result);
+            let _size = line_reader.read_to_string(&mut container_output);
+        }
+        let _stop_result = docker.stop_container(&container.id, Duration::from_secs(timeout_in_seconds));
+        container_output
+    };
 
     let histories = docker.history_image(image_name).unwrap();
 
@@ -301,8 +305,6 @@ mod tests {
 
     #[test]
     fn three_transitions() {
-        let counter = std::rc::Rc::new(Box::new(0u32));
-
         let results = get_changes(vec![lay("1"), lay("2"), lay("3"), lay("4")
                                        , lay("5"), lay("6"), lay("7"), lay("8"), lay("9"), lay("10")
         ], &|x| {
