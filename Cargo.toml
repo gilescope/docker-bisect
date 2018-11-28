@@ -5,3 +5,5 @@ authors = ["Giles Cope <gilescope@gmail.com>"]
 
 [dependencies]
 dockworker={ path="../dockworker" }
+clap="*"
+rand="*"

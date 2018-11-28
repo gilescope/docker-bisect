@@ -1,12 +1,17 @@
 extern crate dockworker;
+extern crate clap;
+extern crate rand;
 
+use clap::{Arg, App};
 use std::io::prelude::*;
-use std::io::{BufReader};
+use std::io::BufReader;
 use std::io::Error;
-use std::ops::Fn;
 use std::clone::Clone;
 use std::time::Duration;
 use std::fmt;
+use std::thread;
+use rand::Rng;
+
 use dockworker::*;
 
 fn truncate(s: &str, max_chars: usize) -> &str {
@@ -17,11 +22,37 @@ fn truncate(s: &str, max_chars: usize) -> &str {
 }
 
 fn main() {
-    let image_name = "myimage:latest";
-    let command_line = vec!["cargo".to_string(), "build".to_string()];
-    let results = try_do(image_name, &command_line);
+    let matches = App::new("Docker Bisecter")
+        .version("1.0")
+        .author("Giles Cope <gilescope@gmail.com>")
+        .about("Run a command against image layers, determines which layers change the output.")
+        .arg(Arg::with_name("timeout")
+                 .short("t")
+            .long("timeout")
+            .help("Number of seconds to run each command for"))
+        .arg(Arg::with_name("image")
+            .value_name("image_name")
+            .help("Docker image name or id to use")
+            .required(true)
+            .takes_value(true))
+        .arg(Arg::with_name("command")
+            .help("Command to call in the container")
+            .required(true)
+            .multiple(true))
+        .get_matches();
 
-    println!("Results of running {:?}", &command_line);
+    //TODO use timeout setting
+    let image_name = matches.value_of("image").unwrap();
+
+    let mut command_line = Vec::<String>::new();
+
+    for arg in matches.values_of("command").unwrap() {
+        command_line.push(arg.to_string());
+    }
+
+    let results = try_do(image_name, command_line);
+
+    println!();
 
     match results {
         Ok(transitions) => {
@@ -86,12 +117,20 @@ impl fmt::Display for Transition {
     }
 }
 
-fn get_changes(layers: Vec<Layer>, action: &Fn(&str) -> String)
-               -> Result<Vec<Transition>, Error> {
-    let first_image_name = &layers.first().unwrap().image_name;
+fn get_changes<T>(layers: Vec<Layer>, action: &T)
+                  -> Result<Vec<Transition>, Error>
+    where T: ContainerAction + 'static
+{
+    let first_image_name: String = layers.first().unwrap().image_name.clone();
     let last_image_name = &layers.last().unwrap().image_name;
-    let start = action(first_image_name);
-    let end = action(last_image_name);
+
+    let action_c = action.clone();
+    let left_handle = thread::spawn(move || {
+        action_c.try_container(&first_image_name)
+    });
+
+    let end = action.try_container(last_image_name);
+    let start = left_handle.join().unwrap();
 
     if start == end {
         return Ok(vec![
@@ -102,15 +141,16 @@ fn get_changes(layers: Vec<Layer>, action: &Fn(&str) -> String)
         ]);
     }
 
-    bisect(&layers[1..layers.len() - 1],
-           &LayerResult { layer: layers.first().unwrap().clone(), result: start },
-           &LayerResult { layer: layers.last().unwrap().clone(), result: end },
-           &action)
+    bisect(Vec::from(&layers[1..layers.len() - 1]),
+           LayerResult { layer: layers.first().unwrap().clone(), result: start },
+           LayerResult { layer: layers.last().unwrap().clone(), result: end },
+           action)
 }
 
-fn bisect(history: &[Layer], start: &LayerResult, end: &LayerResult, action: &Fn(&str) -> String)
-          -> Result<Vec<Transition>, Error> {
-    let mut results: Vec<Transition> = Vec::new();
+fn bisect<T>(history: Vec<Layer>, start: LayerResult, end: LayerResult, action: &T)
+             -> Result<Vec<Transition>, Error>
+    where T: ContainerAction + 'static
+{
     let size = history.len();
     if size == 0 {
         if start.result == end.result {
@@ -125,7 +165,7 @@ fn bisect(history: &[Layer], start: &LayerResult, end: &LayerResult, action: &Fn
     let half = size / 2;
     let mid_result = LayerResult {
         layer: history[half].clone(),
-        result: action(&history[half].image_name)
+        result: action.try_container(&history[half].image_name),
     };
 
     if size == 1 {
@@ -150,40 +190,70 @@ fn bisect(history: &[Layer], start: &LayerResult, end: &LayerResult, action: &Fn
     }
 
     if start.result == mid_result.result
-    {
-        return bisect(&history[half + 1..], &mid_result, &end, &action);
-    }
+        {
+            return bisect(Vec::from(&history[half + 1..]), mid_result, end, action);
+        }
     if mid_result.result == end.result
-    {
-        return bisect(&history[..half], &start, &mid_result, &action);
-    }
+        {
+            return bisect(Vec::from(&history[..half]), start, mid_result, action);
+        }
 
-    let left = bisect(&history[..half], &start, &mid_result, &action).unwrap();
-    let right = bisect(&history[half + 1..], &mid_result, &end, &action).unwrap();
+    let clone_a = action.clone();
+    let clone_b = action.clone();
+    let mid_result_c = mid_result.clone();
 
-    results.extend(left);
-    results.extend(right);
-    Ok(results)
+    let hist_a = Vec::from(&history[..half]);
+
+    let left_handle = thread::spawn(move || {
+        bisect(hist_a, start,
+               mid_result, &clone_a)
+    });
+    let right_handle = thread::spawn(move || {
+        bisect(Vec::from(&history[half + 1..]),
+               mid_result_c, end, &clone_b)
+    });
+    let mut left_results: Vec<Transition> = left_handle.join().unwrap().unwrap();
+    let right_results: Vec<Transition> = right_handle.join().unwrap().unwrap();
+    left_results.extend(right_results);
+    //TODO sort.
+    Ok(left_results)
 }
 
-fn try_do(image_name: &str, command_line: &Vec<String>) -> Result<Vec<Transition>, Error> {
-    let docker = Docker::connect_with_defaults().unwrap();
+trait ContainerAction: Clone + Send {
+    fn try_container(&self, container_id: &str) -> String;
+}
 
-    let create_and_try_container = |container_id: &str| -> String
-    {
-        println!(".");
+#[derive(Clone)]
+struct DockerContainer {
+    image_name: String,
+    command_line: Vec<String>,
+}
+
+impl ContainerAction for DockerContainer {
+    fn try_container(&self, container_id: &'_ str) -> String {
+        let docker = Docker::connect_with_defaults().unwrap();
+        print!(".");
+        let _ = std::io::stdout().flush();
+
         let timeout_in_seconds = 2u64;
         //Remove any existing container with same name...
-        let container_name = String::from("AA");
-        //println!("CONT name : {}", &container_name);
-        let _result = docker.remove_container(&container_name, None, Some(true), None);
+
+        let container_name: String = rand::thread_rng().gen_range(0., 1.3e4).to_string();
+
+//        let mut container_name = String::from(container_id);
+//        container_name = container_name.replace(':', "-");
+//
+//
+//        container_name.push_str("-bisect");
+
+//        let _result = docker.remove_container(&container_name, None, Some(true), None);
 
         //Create container
         let mut create = ContainerCreateOptions::new(&container_id);
         let mut host_config = ContainerHostConfig::new();
         host_config.auto_remove(false);
         create.host_config(host_config);
-        let it = command_line.iter();
+        let it = self.command_line.iter();
         for command in it {
             create.cmd(command.clone());
         }
@@ -217,29 +287,74 @@ fn try_do(image_name: &str, command_line: &Vec<String>) -> Result<Vec<Transition
         }
         let _stop_result = docker.stop_container(&container.id, Duration::from_secs(timeout_in_seconds));
         container_output
+    }
+}
+
+fn try_do(image_name: &str, command_line: Vec<String>) -> Result<Vec<Transition>, Error> {
+    let create_and_try_container = DockerContainer {
+        image_name: String::from(image_name),
+        command_line: command_line,
     };
 
+    let docker = Docker::connect_with_defaults().unwrap();
     let histories = docker.history_image(image_name).unwrap();
 
+    println!("Image Layers:");
+    println!();
+
     let mut layers = Vec::new();
-    for event in histories.iter() { //TODO assert only one history.
+    for (index, event) in histories.iter().rev().enumerate() { //TODO assert only one history.
+        let created = event.created_by.clone().replace("/bin/sh -c #(nop) ", "");
         match event.id.clone() {
             Some(layer_name) => {
+                println!("{:<3} Layer   found: {}", index, created);
                 layers.push(
                     Layer {
                         image_name: layer_name,
                         creation_command: event.created_by.clone(),
                     })
             }
-            None => println!("Skipping {} - no layer found.", event.created_by)
+            None => println!("{:<3} Layer Skipped: {}.", index, created)
         }
     }
+    println!();
+
+    if layers.len() < 2 {
+        println!();
+        eprintln!("{} layers found in cache - not enough layers to bisect.", layers.len());
+        std::process::exit(-1);
+    }
+
     get_changes(layers, &create_and_try_container)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Clone)]
+    struct MapAction {
+        map: HashMap<String, String>
+    }
+
+    impl MapAction {
+        fn new(from: Vec<&str>, to: Vec<&str>) -> Self {
+            let mut object = MapAction { map: HashMap::new() };
+            for (f, t) in from.iter().zip(to.iter()) {
+                object.map.insert(f.to_string(), t.to_string());
+            }
+            object
+        }
+    }
+
+    impl ContainerAction for MapAction {
+        fn try_container(&self, container_id: &'_ str) -> String {
+            let none = String::new();
+            let result: &String = self.map.get(container_id).unwrap_or(&none);
+            result.clone()
+        }
+    }
 
     fn lay(id: &str) -> Layer {
         Layer { image_name: id.to_string(), creation_command: id.to_string() }
@@ -247,12 +362,8 @@ mod tests {
 
     #[test]
     fn if_output_always_same_return_earliest_command() {
-        let results = get_changes(vec![lay("1"), lay("2"), lay("3")], &|x| match x {
-            "1" => "A".to_string(),
-            "2" => "A".to_string(),
-            "3" => "A".to_string(),
-            _ => panic!("unhandled {}", x)
-        });
+        let results = get_changes(vec![lay("1"), lay("2"), lay("3")],
+                                  &MapAction::new(vec!["1", "2", "3"], vec!["A", "A", "A"]));
 
         assert_eq!(results.unwrap(), vec![
             Transition {
@@ -264,12 +375,8 @@ mod tests {
 
     #[test]
     fn if_one_difference_show_command_that_made_difference() {
-        let results = get_changes(vec![lay("1"), lay("2"), lay("3")], &|x| match x {
-            "1" => "A".to_string(),
-            "2" => "A".to_string(),
-            "3" => "B".to_string(),
-            _ => panic!("unhandled {}", x)
-        });
+        let results = get_changes(vec![lay("1"), lay("2"), lay("3")],
+                                  &MapAction::new(vec!["1", "2", "3"], vec!["A", "A", "B"]));
 
         assert_eq!(results.unwrap(), vec![
             Transition {
@@ -281,13 +388,8 @@ mod tests {
 
     #[test]
     fn if_two_differences_show_two_commands_that_made_difference() {
-        let results = get_changes(vec![lay("1"), lay("2"), lay("3"), lay("4")], &|x| match x {
-            "1" => "A".to_string(),
-            "2" => "B".to_string(),
-            "3" => "B".to_string(),
-            "4" => "C".to_string(),
-            _ => panic!("unhandled {}", x)
-        });
+        let results = get_changes(vec![lay("1"), lay("2"), lay("3"), lay("4")],
+                                  &MapAction::new(vec!["1", "2", "3", "4"], vec!["A", "B", "B", "C"]));
 
         let res = results.unwrap();
 
@@ -306,23 +408,9 @@ mod tests {
     #[test]
     fn three_transitions() {
         let results = get_changes(vec![lay("1"), lay("2"), lay("3"), lay("4")
-                                       , lay("5"), lay("6"), lay("7"), lay("8"), lay("9"), lay("10")
-        ], &|x| {
-            match x {
-                "1" => "A".to_string(),
-                "2" => "B".to_string(),
-                "3" => "B".to_string(),
-                "4" => "C".to_string(),
-                "5" => "C".to_string(),
-                "6" => "C".to_string(),
-                "7" => "C".to_string(),
-                "8" => "C".to_string(),
-                "9" => "D".to_string(),
-                "10" => "D".to_string(),
-                _ => panic!("unhandled {}", x)
-            }
-        });
-
+                                       , lay("5"), lay("6"), lay("7"), lay("8"), lay("9"), lay("10")],
+                                  &MapAction::new(vec!["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
+                                                  vec!["A", "B", "B", "C", "C", "C", "C", "C", "D", "D"]));
         let res = results.unwrap();
 
         assert_eq!(res, vec![
