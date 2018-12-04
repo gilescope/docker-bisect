@@ -1,20 +1,20 @@
-extern crate dockworker;
 extern crate clap;
-extern crate rand;
 extern crate colored;
+extern crate dockworker;
+extern crate rand;
 extern crate terminal_size;
 
-use std::io::{prelude::*, BufReader, Error};
 use std::clone::Clone;
-use std::time::Duration;
 use std::fmt;
+use std::io::{prelude::*, BufReader, Error};
 use std::thread;
+use std::time::Duration;
 
-use clap::{Arg, App};
+use clap::{App, Arg};
 use colored::*;
 use dockworker::*;
 use rand::Rng;
-use terminal_size::{Width, terminal_size};
+use terminal_size::{terminal_size, Width};
 
 fn truncate(mut s: &str, max_chars: usize) -> &str {
     s = s.lines().next().unwrap();
@@ -35,20 +35,23 @@ fn main() {
         .version("1.0")
         .author("Giles Cope <gilescope@gmail.com>")
         .about("Run a command against image layers, determines which layers change the output.")
-        .arg(Arg::with_name("timeout")
-                 .short("t")
-            .long("timeout")
-            .help("Number of seconds to run each command for"))
-        .arg(Arg::with_name("image")
-            .value_name("image_name")
-            .help("Docker image name or id to use")
-            .required(true)
-            .takes_value(true))
-        .arg(Arg::with_name("command")
-            .help("Command to call in the container")
-            .required(true)
-            .multiple(true))
-        .get_matches();
+        .arg(
+            Arg::with_name("timeout")
+                .short("t")
+                .long("timeout")
+                .help("Number of seconds to run each command for"),
+        ).arg(
+            Arg::with_name("image")
+                .value_name("image_name")
+                .help("Docker image name or id to use")
+                .required(true)
+                .takes_value(true),
+        ).arg(
+            Arg::with_name("command")
+                .help("Command to call in the container")
+                .required(true)
+                .multiple(true),
+        ).get_matches();
 
     //TODO use timeout setting
     let image_name = matches.value_of("image").unwrap();
@@ -59,7 +62,7 @@ fn main() {
         command_line.push(arg.to_string());
     }
 
-    let mut trunc_size : usize= 100;
+    let mut trunc_size: usize = 100;
     let size = terminal_size();
     if let Some((Width(w), _)) = size {
         trunc_size = (w as usize) - 20;
@@ -68,9 +71,12 @@ fn main() {
     let docker: Docker = Docker::connect_with_defaults().unwrap();
     let histories: Vec<ImageLayer> = docker.history_image(image_name).unwrap();
 
-    let results = try_do(&histories, image_name, command_line,
-                         matches.value_of("timeout").unwrap_or("10").parse().unwrap(),
-        trunc_size
+    let results = try_do(
+        &histories,
+        image_name,
+        command_line,
+        matches.value_of("timeout").unwrap_or("10").parse().unwrap(),
+        trunc_size,
     );
 
     println!();
@@ -83,25 +89,32 @@ fn main() {
             for transition in transitions {
                 //print previous steps...
                 if printed_height < transition.after.layer.height {
-                    for (i, layer) in histories.iter().rev().enumerate().skip(printed_height + 1)
-                        .take(transition.after.layer.height - (printed_height + 1)) {
-                        println!("{}: {}", i,  truncate(
-                            &layer.created_by, trunc_size).bold());
+                    for (i, layer) in histories
+                        .iter()
+                        .rev()
+                        .enumerate()
+                        .skip(printed_height + 1)
+                        .take(transition.after.layer.height - (printed_height + 1))
+                    {
+                        println!("{}: {}", i, truncate(&layer.created_by, trunc_size).bold());
                     }
                 }
 
-                println!("{}: {} CAUSED:\n\n {}", transition.after.layer.height,  truncate(
-                    &transition.after.layer.creation_command, trunc_size).bold(),transition.after.result);
+                println!(
+                    "{}: {} CAUSED:\n\n {}",
+                    transition.after.layer.height,
+                    truncate(&transition.after.layer.creation_command, trunc_size).bold(),
+                    transition.after.result
+                );
                 printed_height = transition.after.layer.height;
             }
         }
-        Err(e) => println!("{:?}", e)
+        Err(e) => println!("{:?}", e),
     }
     //print any training steps...
     if printed_height < histories.len() {
         for (i, layer) in histories.iter().rev().enumerate().skip(printed_height + 1) {
-            println!("{}: {}", i,  truncate(
-                &layer.created_by, trunc_size).bold());
+            println!("{}: {}", i, truncate(&layer.created_by, trunc_size).bold());
         }
     }
 }
@@ -113,8 +126,7 @@ struct Layer {
     creation_command: String,
 }
 
-impl fmt::Display for Layer
-{
+impl fmt::Display for Layer {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{} | {:?}", self.image_name, self.creation_command)
     }
@@ -126,8 +138,7 @@ struct LayerResult {
     result: String,
 }
 
-impl fmt::Display for LayerResult
-{
+impl fmt::Display for LayerResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{} | {}", self.layer, self.result)
     }
@@ -142,47 +153,57 @@ struct Transition {
 impl fmt::Display for Transition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.before {
-            Some(be) => {
-                write!(f, "({} -> {})", be, self.after)
-            }
-            None => write!(f, "-> {}", self.after)
+            Some(be) => write!(f, "({} -> {})", be, self.after),
+            None => write!(f, "-> {}", self.after),
         }
     }
 }
 
-fn get_changes<T>(layers: Vec<Layer>, action: &T)
-                  -> Result<Vec<Transition>, Error>
-    where T: ContainerAction + 'static
+fn get_changes<T>(layers: Vec<Layer>, action: &T) -> Result<Vec<Transition>, Error>
+where
+    T: ContainerAction + 'static,
 {
     let first_image_name: String = layers.first().unwrap().image_name.clone();
     let last_image_name = &layers.last().unwrap().image_name;
 
     let action_c = action.clone();
-    let left_handle = thread::spawn(move || {
-        action_c.try_container(&first_image_name)
-    });
+    let left_handle = thread::spawn(move || action_c.try_container(&first_image_name));
 
     let end = action.try_container(last_image_name);
     let start = left_handle.join().unwrap();
 
     if start == end {
-        return Ok(vec![
-            Transition {
-                before: None,
-                after: LayerResult { layer: layers.last().unwrap().clone(), result: start },
-            }
-        ]);
+        return Ok(vec![Transition {
+            before: None,
+            after: LayerResult {
+                layer: layers.last().unwrap().clone(),
+                result: start,
+            },
+        }]);
     }
 
-    bisect(Vec::from(&layers[1..layers.len() - 1]),
-           LayerResult { layer: layers.first().unwrap().clone(), result: start },
-           LayerResult { layer: layers.last().unwrap().clone(), result: end },
-           action)
+    bisect(
+        Vec::from(&layers[1..layers.len() - 1]),
+        LayerResult {
+            layer: layers.first().unwrap().clone(),
+            result: start,
+        },
+        LayerResult {
+            layer: layers.last().unwrap().clone(),
+            result: end,
+        },
+        action,
+    )
 }
 
-fn bisect<T>(history: Vec<Layer>, start: LayerResult, end: LayerResult, action: &T)
-             -> Result<Vec<Transition>, Error>
-    where T: ContainerAction + 'static
+fn bisect<T>(
+    history: Vec<Layer>,
+    start: LayerResult,
+    end: LayerResult,
+    action: &T,
+) -> Result<Vec<Transition>, Error>
+where
+    T: ContainerAction + 'static,
 {
     let size = history.len();
     if size == 0 {
@@ -204,32 +225,26 @@ fn bisect<T>(history: Vec<Layer>, start: LayerResult, end: LayerResult, action: 
     if size == 1 {
         let mut results = Vec::<Transition>::new();
         if *start.result != mid_result.result {
-            results.push(
-                Transition {
-                    before: Some(start.clone()),
-                    after: mid_result.clone(),
-                }
-            );
+            results.push(Transition {
+                before: Some(start.clone()),
+                after: mid_result.clone(),
+            });
         }
         if mid_result.result != *end.result {
-            results.push(
-                Transition {
-                    before: Some(mid_result),
-                    after: end.clone(),
-                }
-            );
+            results.push(Transition {
+                before: Some(mid_result),
+                after: end.clone(),
+            });
         }
         return Ok(results);
     }
 
-    if start.result == mid_result.result
-        {
-            return bisect(Vec::from(&history[half + 1..]), mid_result, end, action);
-        }
-    if mid_result.result == end.result
-        {
-            return bisect(Vec::from(&history[..half]), start, mid_result, action);
-        }
+    if start.result == mid_result.result {
+        return bisect(Vec::from(&history[half + 1..]), mid_result, end, action);
+    }
+    if mid_result.result == end.result {
+        return bisect(Vec::from(&history[..half]), start, mid_result, action);
+    }
 
     let clone_a = action.clone();
     let clone_b = action.clone();
@@ -237,14 +252,9 @@ fn bisect<T>(history: Vec<Layer>, start: LayerResult, end: LayerResult, action: 
 
     let hist_a = Vec::from(&history[..half]);
 
-    let left_handle = thread::spawn(move || {
-        bisect(hist_a, start,
-               mid_result, &clone_a)
-    });
-    let right_handle = thread::spawn(move || {
-        bisect(Vec::from(&history[half + 1..]),
-               mid_result_c, end, &clone_b)
-    });
+    let left_handle = thread::spawn(move || bisect(hist_a, start, mid_result, &clone_a));
+    let right_handle =
+        thread::spawn(move || bisect(Vec::from(&history[half + 1..]), mid_result_c, end, &clone_b));
     let mut left_results: Vec<Transition> = left_handle.join().unwrap().unwrap();
     let right_results: Vec<Transition> = right_handle.join().unwrap().unwrap();
     left_results.extend(right_results);
@@ -260,7 +270,7 @@ trait ContainerAction: Clone + Send {
 struct DockerContainer {
     image_name: String,
     command_line: Vec<String>,
-    timeout_in_seconds: u64
+    timeout_in_seconds: u64,
 }
 
 impl ContainerAction for DockerContainer {
@@ -281,8 +291,9 @@ impl ContainerAction for DockerContainer {
             create.cmd(command.clone());
         }
 
-        let container: CreateContainerResponse = docker.create_container(
-            Some(&container_name), &create).unwrap();
+        let container: CreateContainerResponse = docker
+            .create_container(Some(&container_name), &create)
+            .unwrap();
 
         let result = docker.start_container(&container.id);
         if result.is_err() {
@@ -297,7 +308,7 @@ impl ContainerAction for DockerContainer {
             since: None,
             timestamps: None,
             tail: None,
-            follow: true
+            follow: true,
         };
 
         std::thread::sleep(Duration::from_secs(self.timeout_in_seconds));
@@ -309,17 +320,28 @@ impl ContainerAction for DockerContainer {
             let mut line_reader = BufReader::new(result);
             let _size = line_reader.read_to_string(&mut container_output);
         }
-        let _stop_result = docker.stop_container(&container.id, Duration::from_secs(self.timeout_in_seconds));
+        let _stop_result =
+            docker.stop_container(&container.id, Duration::from_secs(self.timeout_in_seconds));
         container_output
     }
 }
 
-fn try_do(histories: &Vec<ImageLayer>, image_name: &str, command_line: Vec<String>, timeout_in_seconds: u64, trunk_size: usize) -> Result<Vec<Transition>, Error> {
-    println!("\n{}\n\n{:?}\n", "Command to apply to layers:".bold(), &command_line);
+fn try_do(
+    histories: &Vec<ImageLayer>,
+    image_name: &str,
+    command_line: Vec<String>,
+    timeout_in_seconds: u64,
+    trunk_size: usize,
+) -> Result<Vec<Transition>, Error> {
+    println!(
+        "\n{}\n\n{:?}\n",
+        "Command to apply to layers:".bold(),
+        &command_line
+    );
     let create_and_try_container = DockerContainer {
         image_name: String::from(image_name),
         command_line,
-        timeout_in_seconds
+        timeout_in_seconds,
     };
 
     println!("{}", "Skipped Image Layers:".bold());
@@ -330,24 +352,31 @@ fn try_do(histories: &Vec<ImageLayer>, image_name: &str, command_line: Vec<Strin
         let mut created = event.created_by.clone();
         created = truncate(&created, trunk_size).to_string();
         match event.id.clone() {
-            Some(layer_name) => {
-                layers.push(
-                    Layer {
-                        height: index,
-                        image_name: layer_name,
-                        creation_command: event.created_by.clone(),
-                    })
-            }
-            None => println!("Missing layer: {:<3}: {}.", index, truncate(&created, trunk_size))
+            Some(layer_name) => layers.push(Layer {
+                height: index,
+                image_name: layer_name,
+                creation_command: event.created_by.clone(),
+            }),
+            None => println!(
+                "Missing layer: {:<3}: {}.",
+                index,
+                truncate(&created, trunk_size)
+            ),
         }
     }
 
     println!();
-    println!("{}", "Bisecting found layers (running command on the layers) ==>".bold());
+    println!(
+        "{}",
+        "Bisecting found layers (running command on the layers) ==>".bold()
+    );
 
     if layers.len() < 2 {
         println!();
-        eprintln!("{} layers found in cache - not enough layers to bisect.", layers.len());
+        eprintln!(
+            "{} layers found in cache - not enough layers to bisect.",
+            layers.len()
+        );
         std::process::exit(-1);
     }
 
@@ -361,12 +390,14 @@ mod tests {
 
     #[derive(Clone)]
     struct MapAction {
-        map: HashMap<String, String>
+        map: HashMap<String, String>,
     }
 
     impl MapAction {
         fn new(from: Vec<usize>, to: Vec<&str>) -> Self {
-            let mut object = MapAction { map: HashMap::new() };
+            let mut object = MapAction {
+                map: HashMap::new(),
+            };
             for (f, t) in from.iter().zip(to.iter()) {
                 object.map.insert(f.to_string(), t.to_string());
             }
@@ -383,75 +414,146 @@ mod tests {
     }
 
     fn lay(id: usize) -> Layer {
-        Layer { height: id, image_name: id.to_string(), creation_command: id.to_string() }
+        Layer {
+            height: id,
+            image_name: id.to_string(),
+            creation_command: id.to_string(),
+        }
     }
 
     #[test]
     fn if_output_always_same_return_earliest_command() {
-        let results = get_changes(vec![lay(1), lay(2), lay(3)],
-                                  &MapAction::new(vec![1, 2, 3], vec!["A", "A", "A"]));
+        let results = get_changes(
+            vec![lay(1), lay(2), lay(3)],
+            &MapAction::new(vec![1, 2, 3], vec!["A", "A", "A"]),
+        );
 
-        assert_eq!(results.unwrap(), vec![
-            Transition {
+        assert_eq!(
+            results.unwrap(),
+            vec![Transition {
                 before: None,
-                after: LayerResult { layer: lay(3), result: "A".to_string() },
-            }
-        ]);
+                after: LayerResult {
+                    layer: lay(3),
+                    result: "A".to_string()
+                },
+            }]
+        );
     }
 
     #[test]
     fn if_one_difference_show_command_that_made_difference() {
-        let results = get_changes(vec![lay(1), lay(2), lay(3)],
-                                  &MapAction::new(vec![1, 2, 3], vec!["A", "A", "B"]));
+        let results = get_changes(
+            vec![lay(1), lay(2), lay(3)],
+            &MapAction::new(vec![1, 2, 3], vec!["A", "A", "B"]),
+        );
 
-        assert_eq!(results.unwrap(), vec![
-            Transition {
-                before: Some(LayerResult { layer: lay(2), result: "A".to_string() }),
-                after: LayerResult { layer: lay(3), result: "B".to_string() },
-            }
-        ]);
+        assert_eq!(
+            results.unwrap(),
+            vec![Transition {
+                before: Some(LayerResult {
+                    layer: lay(2),
+                    result: "A".to_string()
+                }),
+                after: LayerResult {
+                    layer: lay(3),
+                    result: "B".to_string()
+                },
+            }]
+        );
     }
 
     #[test]
     fn if_two_differences_show_two_commands_that_made_difference() {
-        let results = get_changes(vec![lay(1), lay(2), lay(3), lay(4)],
-                                  &MapAction::new(vec![1, 2, 3, 4], vec!["A", "B", "B", "C"]));
+        let results = get_changes(
+            vec![lay(1), lay(2), lay(3), lay(4)],
+            &MapAction::new(vec![1, 2, 3, 4], vec!["A", "B", "B", "C"]),
+        );
 
         let res = results.unwrap();
 
-        assert_eq!(res, vec![
-            Transition {
-                before: Some(LayerResult { layer: lay(1), result: "A".to_string() }),
-                after: LayerResult { layer: lay(2), result: "B".to_string() },
-            },
-            Transition {
-                before: Some(LayerResult { layer: lay(3), result: "B".to_string() }),
-                after: LayerResult { layer: lay(4), result: "C".to_string() },
-            }
-        ]);
+        assert_eq!(
+            res,
+            vec![
+                Transition {
+                    before: Some(LayerResult {
+                        layer: lay(1),
+                        result: "A".to_string()
+                    }),
+                    after: LayerResult {
+                        layer: lay(2),
+                        result: "B".to_string()
+                    },
+                },
+                Transition {
+                    before: Some(LayerResult {
+                        layer: lay(3),
+                        result: "B".to_string()
+                    }),
+                    after: LayerResult {
+                        layer: lay(4),
+                        result: "C".to_string()
+                    },
+                }
+            ]
+        );
     }
 
     #[test]
     fn three_transitions() {
-        let results = get_changes(vec![lay(1), lay(2), lay(3), lay(4)
-                                       , lay(5), lay(6), lay(7), lay(8), lay(9), lay(10)],
-                                  &MapAction::new(vec![1, 2,3, 4, 5, 6, 7, 8, 9, 10],
-                                                  vec!["A", "B", "B", "C", "C", "C", "C", "C", "D", "D"]));
+        let results = get_changes(
+            vec![
+                lay(1),
+                lay(2),
+                lay(3),
+                lay(4),
+                lay(5),
+                lay(6),
+                lay(7),
+                lay(8),
+                lay(9),
+                lay(10),
+            ],
+            &MapAction::new(
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                vec!["A", "B", "B", "C", "C", "C", "C", "C", "D", "D"],
+            ),
+        );
         let res = results.unwrap();
 
-        assert_eq!(res, vec![
-            Transition {
-                before: Some(LayerResult { layer: lay(1), result: "A".to_string() }),
-                after: LayerResult { layer: lay(2), result: "B".to_string() },
-            },
-            Transition {
-                before: Some(LayerResult { layer: lay(3), result: "B".to_string() }),
-                after: LayerResult { layer: lay(4), result: "C".to_string() },
-            },
-            Transition {
-                before: Some(LayerResult { layer: lay(8), result: "C".to_string() }),
-                after: LayerResult { layer: lay(9), result: "D".to_string() },
-            }
-        ]);
+        assert_eq!(
+            res,
+            vec![
+                Transition {
+                    before: Some(LayerResult {
+                        layer: lay(1),
+                        result: "A".to_string()
+                    }),
+                    after: LayerResult {
+                        layer: lay(2),
+                        result: "B".to_string()
+                    },
+                },
+                Transition {
+                    before: Some(LayerResult {
+                        layer: lay(3),
+                        result: "B".to_string()
+                    }),
+                    after: LayerResult {
+                        layer: lay(4),
+                        result: "C".to_string()
+                    },
+                },
+                Transition {
+                    before: Some(LayerResult {
+                        layer: lay(8),
+                        result: "C".to_string()
+                    }),
+                    after: LayerResult {
+                        layer: lay(9),
+                        result: "D".to_string()
+                    },
+                }
+            ]
+        );
     }
 }
