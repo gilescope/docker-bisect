@@ -17,11 +17,11 @@ use rand::Rng;
 use terminal_size::{terminal_size, Width};
 
 fn truncate(mut s: &str, max_chars: usize) -> &str {
-    s = s.lines().next().unwrap();
+    s = s.lines().next().expect("nothing to truncate");
     if s.contains("#(nop) ") {
         let mut splat = s.split(" #(nop) ");
         let _ = splat.next();
-        s = splat.next().unwrap();
+        s = splat.next().expect("#(nop) with no command in.");
         s = s.trim();
     }
     match s.char_indices().nth(max_chars) {
@@ -31,10 +31,10 @@ fn truncate(mut s: &str, max_chars: usize) -> &str {
 }
 
 fn main() {
-    let matches = App::new("Docker Bisecter")
+    let matches = App::new("Docker Bisector")
         .version("1.0")
         .author("Giles Cope <gilescope@gmail.com>")
-        .about("Run a command against image layers, determines which layers change the output.")
+        .about("Run a command against image layers, find which layers change the output.")
         .arg(
             Arg::with_name("timeout")
                 .short("t")
@@ -48,17 +48,15 @@ fn main() {
                 .takes_value(true),
         ).arg(
             Arg::with_name("command")
-                .help("Command to call in the container")
+                .help("Command and args to call in the container")
                 .required(true)
                 .multiple(true),
         ).get_matches();
 
-    //TODO use timeout setting
-    let image_name = matches.value_of("image").unwrap();
-
+    let image_name = matches.value_of("image").expect("image expected");
     let mut command_line = Vec::<String>::new();
 
-    for arg in matches.values_of("command").unwrap() {
+    for arg in matches.values_of("command").expect("command expected") {
         command_line.push(arg.to_string());
     }
 
@@ -68,14 +66,18 @@ fn main() {
         trunc_size = (w as usize) - 20;
     }
 
-    let docker: Docker = Docker::connect_with_defaults().unwrap();
-    let histories: Vec<ImageLayer> = docker.history_image(image_name).unwrap();
+    let docker: Docker = Docker::connect_with_defaults()
+        .expect("Can't connect to docker daemon. Is it running?");
 
-    let results = try_do(
+    let histories: Vec<ImageLayer> = docker.history_image(image_name)
+        .expect("Can't get layers from image.");
+
+    let results: Result<Vec<Transition>, Error> = try_do(
         &histories,
         image_name,
         command_line,
-        matches.value_of("timeout").unwrap_or("10").parse().unwrap(),
+        matches.value_of("timeout").unwrap_or("10").parse()
+            .expect("Can't parse timeout value, expected --timeout=10 "),
         trunc_size,
     );
 
@@ -85,7 +87,8 @@ fn main() {
 
     let mut printed_height = 0;
     match results {
-        Ok(transitions) => {
+        Ok(mut transitions) => {
+            transitions.sort_by(|t1, t2| t1.after.layer.height.cmp(&t2.after.layer.height));
             for transition in transitions {
                 //print previous steps...
                 if printed_height < transition.after.layer.height {
@@ -163,20 +166,23 @@ fn get_changes<T>(layers: Vec<Layer>, action: &T) -> Result<Vec<Transition>, Err
 where
     T: ContainerAction + 'static,
 {
-    let first_image_name: String = layers.first().unwrap().image_name.clone();
-    let last_image_name = &layers.last().unwrap().image_name;
+    let first_layer = layers.first().expect("no first layer");
+    let last_layer = layers.last().expect("no last layer");
+
+    let first_image_name : String = first_layer.image_name.clone();
+    let last_image_name = &last_layer.image_name;
 
     let action_c = action.clone();
     let left_handle = thread::spawn(move || action_c.try_container(&first_image_name));
 
     let end = action.try_container(last_image_name);
-    let start = left_handle.join().unwrap();
+    let start = left_handle.join().expect("first layer execution error!");
 
     if start == end {
         return Ok(vec![Transition {
             before: None,
             after: LayerResult {
-                layer: layers.last().unwrap().clone(),
+                layer: last_layer.clone(),
                 result: start,
             },
         }]);
@@ -185,11 +191,11 @@ where
     bisect(
         Vec::from(&layers[1..layers.len() - 1]),
         LayerResult {
-            layer: layers.first().unwrap().clone(),
+            layer: first_layer.clone(),
             result: start,
         },
         LayerResult {
-            layer: layers.last().unwrap().clone(),
+            layer: last_layer.clone(),
             result: end,
         },
         action,
@@ -252,13 +258,20 @@ where
 
     let hist_a = Vec::from(&history[..half]);
 
-    let left_handle = thread::spawn(move || bisect(hist_a, start, mid_result, &clone_a));
+    let left_handle = thread::spawn(move ||
+        bisect(hist_a, start, mid_result, &clone_a)
+    );
     let right_handle =
-        thread::spawn(move || bisect(Vec::from(&history[half + 1..]), mid_result_c, end, &clone_b));
-    let mut left_results: Vec<Transition> = left_handle.join().unwrap().unwrap();
-    let right_results: Vec<Transition> = right_handle.join().unwrap().unwrap();
-    left_results.extend(right_results);
-    //TODO sort.
+        thread::spawn(move ||
+            bisect(Vec::from(&history[half + 1..]), mid_result_c, end, &clone_b)
+        );
+    let mut left_results: Vec<Transition> = left_handle.join()
+        .expect("left").expect("left transition err");
+
+    let right_results: Vec<Transition> = right_handle.join().expect("right")
+        .expect("right transition err");
+
+    left_results.extend(right_results); // These results are sorted later...
     Ok(left_results)
 }
 
@@ -274,8 +287,8 @@ struct DockerContainer {
 }
 
 impl ContainerAction for DockerContainer {
-    fn try_container(&self, container_id: &'_ str) -> String {
-        let docker = Docker::connect_with_defaults().unwrap();
+    fn try_container(&self, container_id: &str) -> String {
+        let docker: Docker = Docker::connect_with_defaults().expect("docker daemon running?");
         print!(".");
         let _ = std::io::stdout().flush();
 
@@ -293,7 +306,7 @@ impl ContainerAction for DockerContainer {
 
         let container: CreateContainerResponse = docker
             .create_container(Some(&container_name), &create)
-            .unwrap();
+            .expect("couldn't create container");
 
         let result = docker.start_container(&container.id);
         if result.is_err() {
@@ -406,7 +419,7 @@ mod tests {
     }
 
     impl ContainerAction for MapAction {
-        fn try_container(&self, container_id: &'_ str) -> String {
+        fn try_container(&self, container_id: &str) -> String {
             let none = String::new();
             let result: &String = self.map.get(container_id).unwrap_or(&none);
             result.clone()
