@@ -1,18 +1,21 @@
 extern crate clap;
 extern crate colored;
 extern crate dockworker;
+extern crate indicatif;
 extern crate rand;
 extern crate terminal_size;
 
 use std::clone::Clone;
 use std::fmt;
 use std::io::{prelude::*, BufReader, Error};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use clap::{App, Arg};
 use colored::*;
 use dockworker::*;
+use indicatif::ProgressBar;
 use rand::Rng;
 use terminal_size::{terminal_size, Width};
 
@@ -66,17 +69,21 @@ fn main() {
         trunc_size = (w as usize) - 20;
     }
 
-    let docker: Docker = Docker::connect_with_defaults()
-        .expect("Can't connect to docker daemon. Is it running?");
+    let docker: Docker =
+        Docker::connect_with_defaults().expect("Can't connect to docker daemon. Is it running?");
 
-    let histories: Vec<ImageLayer> = docker.history_image(image_name)
+    let histories: Vec<ImageLayer> = docker
+        .history_image(image_name)
         .expect("Can't get layers from image.");
 
     let results: Result<Vec<Transition>, Error> = try_do(
         &histories,
         image_name,
         command_line,
-        matches.value_of("timeout").unwrap_or("10").parse()
+        matches
+            .value_of("timeout")
+            .unwrap_or("10")
+            .parse()
             .expect("Can't parse timeout value, expected --timeout=10 "),
         trunc_size,
     );
@@ -89,6 +96,7 @@ fn main() {
     match results {
         Ok(mut transitions) => {
             transitions.sort_by(|t1, t2| t1.after.layer.height.cmp(&t2.after.layer.height));
+
             for transition in transitions {
                 //print previous steps...
                 if printed_height < transition.after.layer.height {
@@ -169,7 +177,7 @@ where
     let first_layer = layers.first().expect("no first layer");
     let last_layer = layers.last().expect("no last layer");
 
-    let first_image_name : String = first_layer.image_name.clone();
+    let first_image_name: String = first_layer.image_name.clone();
     let last_image_name = &last_layer.image_name;
 
     let action_c = action.clone();
@@ -246,9 +254,11 @@ where
     }
 
     if start.result == mid_result.result {
+        action.skip((mid_result.layer.height - start.layer.height) as u64);
         return bisect(Vec::from(&history[half + 1..]), mid_result, end, action);
     }
     if mid_result.result == end.result {
+        action.skip((end.layer.height - mid_result.layer.height) as u64);
         return bisect(Vec::from(&history[..half]), start, mid_result, action);
     }
 
@@ -258,17 +268,17 @@ where
 
     let hist_a = Vec::from(&history[..half]);
 
-    let left_handle = thread::spawn(move ||
-        bisect(hist_a, start, mid_result, &clone_a)
-    );
+    let left_handle = thread::spawn(move || bisect(hist_a, start, mid_result, &clone_a));
     let right_handle =
-        thread::spawn(move ||
-            bisect(Vec::from(&history[half + 1..]), mid_result_c, end, &clone_b)
-        );
-    let mut left_results: Vec<Transition> = left_handle.join()
-        .expect("left").expect("left transition err");
+        thread::spawn(move || bisect(Vec::from(&history[half + 1..]), mid_result_c, end, &clone_b));
+    let mut left_results: Vec<Transition> = left_handle
+        .join()
+        .expect("left")
+        .expect("left transition err");
 
-    let right_results: Vec<Transition> = right_handle.join().expect("right")
+    let right_results: Vec<Transition> = right_handle
+        .join()
+        .expect("right")
         .expect("right transition err");
 
     left_results.extend(right_results); // These results are sorted later...
@@ -277,21 +287,38 @@ where
 
 trait ContainerAction: Clone + Send {
     fn try_container(&self, container_id: &str) -> String;
+    fn skip(&self, count: u64) -> ();
 }
 
 #[derive(Clone)]
 struct DockerContainer {
+    pb: Arc<ProgressBar>,
     image_name: String,
     command_line: Vec<String>,
     timeout_in_seconds: u64,
 }
 
+impl DockerContainer {
+    fn new(
+        total: u64,
+        image_name: String,
+        command_line: Vec<String>,
+        timeout_in_seconds: u64,
+    ) -> DockerContainer {
+        let pb = Arc::new(ProgressBar::new(total));
+
+        DockerContainer {
+            pb,
+            image_name,
+            command_line,
+            timeout_in_seconds,
+        }
+    }
+}
+
 impl ContainerAction for DockerContainer {
     fn try_container(&self, container_id: &str) -> String {
         let docker: Docker = Docker::connect_with_defaults().expect("docker daemon running?");
-        print!(".");
-        let _ = std::io::stdout().flush();
-
         let container_name: String = rand::thread_rng().gen_range(0., 1.3e4).to_string();
 
         //Create container
@@ -325,6 +352,7 @@ impl ContainerAction for DockerContainer {
         };
 
         std::thread::sleep(Duration::from_secs(self.timeout_in_seconds));
+        self.pb.inc(1);
 
         let mut container_output = String::new();
 
@@ -336,6 +364,10 @@ impl ContainerAction for DockerContainer {
         let _stop_result =
             docker.stop_container(&container.id, Duration::from_secs(self.timeout_in_seconds));
         container_output
+    }
+
+    fn skip(&self, count: u64) -> () {
+        self.pb.inc(count);
     }
 }
 
@@ -351,13 +383,14 @@ fn try_do(
         "Command to apply to layers:".bold(),
         &command_line
     );
-    let create_and_try_container = DockerContainer {
-        image_name: String::from(image_name),
+    let create_and_try_container = DockerContainer::new(
+        histories.len() as u64,
+        String::from(image_name),
         command_line,
         timeout_in_seconds,
-    };
+    );
 
-    println!("{}", "Skipped Image Layers:".bold());
+    println!("{}", "Skipped missing layers:".bold());
     println!();
 
     let mut layers = Vec::new();
@@ -370,18 +403,14 @@ fn try_do(
                 image_name: layer_name,
                 creation_command: event.created_by.clone(),
             }),
-            None => println!(
-                "Missing layer: {:<3}: {}.",
-                index,
-                truncate(&created, trunk_size)
-            ),
+            None => println!("{:<3}: {}.", index, truncate(&created, trunk_size)),
         }
     }
 
     println!();
     println!(
         "{}",
-        "Bisecting found layers (running command on the layers) ==>".bold()
+        "Bisecting found layers (running command on the layers) ==>\n".bold()
     );
 
     if layers.len() < 2 {
@@ -393,7 +422,9 @@ fn try_do(
         std::process::exit(-1);
     }
 
-    get_changes(layers, &create_and_try_container)
+    let results = get_changes(layers, &create_and_try_container);
+    create_and_try_container.pb.finish_with_message("done");
+    results
 }
 
 #[cfg(test)]
@@ -424,6 +455,8 @@ mod tests {
             let result: &String = self.map.get(container_id).unwrap_or(&none);
             result.clone()
         }
+
+        fn skip(&self, _count: u64) -> () {}
     }
 
     fn lay(id: usize) -> Layer {
