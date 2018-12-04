@@ -7,3 +7,5 @@ authors = ["Giles Cope <gilescope@gmail.com>"]
 dockworker={ path="../dockworker" }
 clap="*"
 rand="*"
+colored = "1.6"
+terminal_size="*"
