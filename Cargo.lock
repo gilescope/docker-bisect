@@ -157,7 +157,7 @@ version = "0.1.0"
 dependencies = [
  "clap 2.32.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "colored 1.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "dockworker 0.0.7",
+ "dockworker 0.0.7 (git+https://github.com/gilescope/dockworker.git?branch=feature/logs)",
  "indicatif 0.10.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "terminal_size 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -166,6 +166,7 @@ dependencies = [
 [[package]]
 name = "dockworker"
 version = "0.0.7"
+source = "git+https://github.com/gilescope/dockworker.git?branch=feature/logs#1bc4add4d451c138ee786dff17a38e84d6394482"
 dependencies = [
  "base64 0.9.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "byteorder 1.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -856,6 +857,7 @@ dependencies = [
 "checksum console 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)" = "4ba5561f4d4d89e0f246d4dd83846d96f617e886b96c7aee36e68791c98f89ce"
 "checksum cookie 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)" = "0e3d6405328b6edb412158b3b7710e2634e23f3614b9bb1c412df7952489a626"
 "checksum dbghelp-sys 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "97590ba53bcb8ac28279161ca943a924d1fd4a8fb3fa63302591647c4fc5b850"
+"checksum dockworker 0.0.7 (git+https://github.com/gilescope/dockworker.git?branch=feature/logs)" = "<none>"
 "checksum error-chain 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "bd5c82c815138e278b8dcdeffc49f27ea6ffb528403e9dea4194f2e3dd40b143"
 "checksum filetime 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "b3ea0c97183a611b1673e5e28b160d7e1035106cad053c988aae3bbd996fdcce"
 "checksum fuchsia-zircon 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "2e9763c69ebaae630ba35f74888db465e49e259ba1bc0eda7d06f4a067615d82"
