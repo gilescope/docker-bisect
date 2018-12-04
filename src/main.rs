@@ -54,6 +54,10 @@ fn main() {
                 .help("Command and args to call in the container")
                 .required(true)
                 .multiple(true),
+        ).arg(
+        Arg::with_name("truncate")
+            .long("truncate")
+            .help("Number of chars to truncate to (default is term width)"),
         ).get_matches();
 
     let image_name = matches.value_of("image").expect("image expected");
@@ -63,10 +67,17 @@ fn main() {
         command_line.push(arg.to_string());
     }
 
-    let mut trunc_size: usize = 100;
+    let mut trunc_size: usize = matches
+        .value_of("truncate")
+        .unwrap_or("100")
+        .parse()
+        .expect("Can't parse timeout value, expected --timeout=10 ");
+
     let size = terminal_size();
     if let Some((Width(w), _)) = size {
-        trunc_size = (w as usize) - 20;
+        if trunc_size == 100 {
+            trunc_size = (w as usize) - 10;
+        }
     }
 
     let docker: Docker =
