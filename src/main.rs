@@ -34,9 +34,8 @@ fn truncate(mut s: &str, max_chars: usize) -> &str {
 }
 
 fn main() {
-    let matches = App::new("Docker Bisector")
-        .version("1.0")
-        .author("Giles Cope <gilescope@gmail.com>")
+    let matches = App::new("docker-bisect")
+        .version("0.1")
         .about("Run a command against image layers, find which layers change the output.")
         .arg(
             Arg::with_name("timeout")
