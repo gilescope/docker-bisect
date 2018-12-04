@@ -5,7 +5,7 @@ authors = ["Giles Cope <gilescope@gmail.com>"]
 
 [dependencies]
 dockworker={ path="../dockworker" }
-clap="*"
-rand="*"
+clap="2.32"
+rand="0.6"
 colored = "1.6"
-terminal_size="*"
+terminal_size="0.1"
