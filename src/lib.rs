@@ -1,9 +1,10 @@
-extern crate clap;
+//! # docker-bisect
+//! `docker-bisect` create assumes that the docker daemon is running and that you have a
+//! docker image with cached layers to probe.
 extern crate colored;
 extern crate dockworker;
 extern crate indicatif;
 extern crate rand;
-extern crate terminal_size;
 
 use std::clone::Clone;
 use std::fmt;
@@ -12,14 +13,21 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use clap::{App, Arg};
 use colored::*;
 use dockworker::*;
 use indicatif::ProgressBar;
 use rand::Rng;
-use terminal_size::{terminal_size, Width};
 
-fn truncate(mut s: &str, max_chars: usize) -> &str {
+/// Truncates a string to a single line with a max width
+/// and removes docker prefixes.
+///
+/// # Example
+/// ```
+/// use docker_bisect::truncate;
+/// let line = "blar #(nop) real command\n line 2";
+/// assert_eq!("real com", truncate(&line, 8));
+/// ```
+pub fn truncate(mut s: &str, max_chars: usize) -> &str {
     s = s.lines().next().expect("nothing to truncate");
     if s.contains("#(nop) ") {
         let mut splat = s.split(" #(nop) ");
@@ -33,118 +41,12 @@ fn truncate(mut s: &str, max_chars: usize) -> &str {
     }
 }
 
-fn main() {
-    let matches = App::new("docker-bisect")
-        .version("0.1")
-        .about("Run a command against image layers, find which layers change the output.")
-        .arg(
-            Arg::with_name("timeout")
-                .short("t")
-                .long("timeout")
-                .help("Number of seconds to run each command for"),
-        ).arg(
-            Arg::with_name("image")
-                .value_name("image_name")
-                .help("Docker image name or id to use")
-                .required(true)
-                .takes_value(true),
-        ).arg(
-            Arg::with_name("command")
-                .help("Command and args to call in the container")
-                .required(true)
-                .multiple(true),
-        ).arg(
-        Arg::with_name("truncate")
-            .long("truncate")
-            .help("Number of chars to truncate to (default is term width)"),
-        ).get_matches();
-
-    let image_name = matches.value_of("image").expect("image expected");
-    let mut command_line = Vec::<String>::new();
-
-    for arg in matches.values_of("command").expect("command expected") {
-        command_line.push(arg.to_string());
-    }
-
-    let mut trunc_size: usize = matches
-        .value_of("truncate")
-        .unwrap_or("100")
-        .parse()
-        .expect("Can't parse timeout value, expected --timeout=10 ");
-
-    let size = terminal_size();
-    if let Some((Width(w), _)) = size {
-        if trunc_size == 100 {
-            trunc_size = (w as usize) - 10;
-        }
-    }
-
-    let docker: Docker =
-        Docker::connect_with_defaults().expect("Can't connect to docker daemon. Is it running?");
-
-    let histories: Vec<ImageLayer> = docker
-        .history_image(image_name)
-        .expect("Can't get layers from image.");
-
-    let results: Result<Vec<Transition>, Error> = try_do(
-        &histories,
-        image_name,
-        command_line,
-        matches
-            .value_of("timeout")
-            .unwrap_or("10")
-            .parse()
-            .expect("Can't parse timeout value, expected --timeout=10 "),
-        trunc_size,
-    );
-
-    println!();
-    println!("{}", "\nResults ==>".bold());
-    println!();
-
-    let mut printed_height = 0;
-    match results {
-        Ok(mut transitions) => {
-            transitions.sort_by(|t1, t2| t1.after.layer.height.cmp(&t2.after.layer.height));
-
-            for transition in transitions {
-                //print previous steps...
-                if printed_height < transition.after.layer.height {
-                    for (i, layer) in histories
-                        .iter()
-                        .rev()
-                        .enumerate()
-                        .skip(printed_height + 1)
-                        .take(transition.after.layer.height - (printed_height + 1))
-                    {
-                        println!("{}: {}", i, truncate(&layer.created_by, trunc_size).bold());
-                    }
-                }
-
-                println!(
-                    "{}: {} CAUSED:\n\n {}",
-                    transition.after.layer.height,
-                    truncate(&transition.after.layer.creation_command, trunc_size).bold(),
-                    transition.after.result
-                );
-                printed_height = transition.after.layer.height;
-            }
-        }
-        Err(e) => println!("{:?}", e),
-    }
-    //print any training steps...
-    if printed_height < histories.len() {
-        for (i, layer) in histories.iter().rev().enumerate().skip(printed_height + 1) {
-            println!("{}: {}", i, truncate(&layer.created_by, trunc_size).bold());
-        }
-    }
-}
-
+/// A layer in a docker image. (A layer is a set of files changed due to the previous command).
 #[derive(Debug, Clone, Eq, Ord, PartialOrd, PartialEq)]
-struct Layer {
-    height: usize,
-    image_name: String,
-    creation_command: String,
+pub struct Layer {
+    pub height: usize,
+    pub image_name: String,
+    pub creation_command: String,
 }
 
 impl fmt::Display for Layer {
@@ -153,10 +55,12 @@ impl fmt::Display for Layer {
     }
 }
 
+/// The stderr/stdout of running the command on a container made of this layer
+/// (on top of all earlier layers). If command hit the timeout the result may be truncated or empty.
 #[derive(Debug, Clone, Eq, Ord, PartialOrd, PartialEq)]
-struct LayerResult {
-    layer: Layer,
-    result: String,
+pub struct LayerResult {
+    pub layer: Layer,
+    pub result: String,
 }
 
 impl fmt::Display for LayerResult {
@@ -165,10 +69,12 @@ impl fmt::Display for LayerResult {
     }
 }
 
+/// A Transition is the LayerResult of running the command on the lower layer
+/// and of running the command on the higher layer. No-op transitions are not recorded.
 #[derive(Debug, Eq, Ord, PartialOrd, PartialEq)]
-struct Transition {
-    before: Option<LayerResult>,
-    after: LayerResult,
+pub struct Transition {
+    pub before: Option<LayerResult>,
+    pub after: LayerResult,
 }
 
 impl fmt::Display for Transition {
@@ -180,6 +86,8 @@ impl fmt::Display for Transition {
     }
 }
 
+/// Starts the bisect operation. Calculates highest and lowest layer result and if they have
+/// different outputs it starts a binary chop to figure out which layer(s) caused the change.
 fn get_changes<T>(layers: Vec<Layer>, action: &T) -> Result<Vec<Transition>, Error>
 where
     T: ContainerAction + 'static,
@@ -303,23 +211,16 @@ trait ContainerAction: Clone + Send {
 #[derive(Clone)]
 struct DockerContainer {
     pb: Arc<ProgressBar>,
-    image_name: String,
     command_line: Vec<String>,
-    timeout_in_seconds: u64,
+    timeout_in_seconds: usize,
 }
 
 impl DockerContainer {
-    fn new(
-        total: u64,
-        image_name: String,
-        command_line: Vec<String>,
-        timeout_in_seconds: u64,
-    ) -> DockerContainer {
+    fn new(total: u64, command_line: Vec<String>, timeout_in_seconds: usize) -> DockerContainer {
         let pb = Arc::new(ProgressBar::new(total));
 
         DockerContainer {
             pb,
-            image_name,
             command_line,
             timeout_in_seconds,
         }
@@ -361,7 +262,9 @@ impl ContainerAction for DockerContainer {
             follow: true,
         };
 
-        std::thread::sleep(Duration::from_secs(self.timeout_in_seconds));
+        let timeout = Duration::from_secs(self.timeout_in_seconds as u64);
+        //TODO stop sleeping if container is finished.
+        std::thread::sleep(timeout);
         self.pb.inc(1);
 
         let mut container_output = String::new();
@@ -371,8 +274,8 @@ impl ContainerAction for DockerContainer {
             let mut line_reader = BufReader::new(result);
             let _size = line_reader.read_to_string(&mut container_output);
         }
-        let _stop_result =
-            docker.stop_container(&container.id, Duration::from_secs(self.timeout_in_seconds));
+        //TODO stop could be async...
+        let _stop_result = docker.stop_container(&container.id, timeout);
         container_output
     }
 
@@ -381,12 +284,18 @@ impl ContainerAction for DockerContainer {
     }
 }
 
-fn try_do(
+/// Struct to hold parameters.
+pub struct BisectOptions {
+    pub timeout_in_seconds: usize,
+    pub trunc_size: usize,
+}
+
+/// Create containers based on layers and run command_line against them.
+/// Result is the differences in std out and std err.
+pub fn try_bisect(
     histories: &Vec<ImageLayer>,
-    image_name: &str,
     command_line: Vec<String>,
-    timeout_in_seconds: u64,
-    trunk_size: usize,
+    options: BisectOptions,
 ) -> Result<Vec<Transition>, Error> {
     println!(
         "\n{}\n\n{:?}\n",
@@ -395,9 +304,8 @@ fn try_do(
     );
     let create_and_try_container = DockerContainer::new(
         histories.len() as u64,
-        String::from(image_name),
         command_line,
-        timeout_in_seconds,
+        options.timeout_in_seconds,
     );
 
     println!("{}", "Skipped missing layers:".bold());
@@ -406,14 +314,14 @@ fn try_do(
     let mut layers = Vec::new();
     for (index, event) in histories.iter().rev().enumerate() {
         let mut created = event.created_by.clone();
-        created = truncate(&created, trunk_size).to_string();
+        created = truncate(&created, options.trunc_size).to_string();
         match event.id.clone() {
             Some(layer_name) => layers.push(Layer {
                 height: index,
                 image_name: layer_name,
                 creation_command: event.created_by.clone(),
             }),
-            None => println!("{:<3}: {}.", index, truncate(&created, trunk_size)),
+            None => println!("{:<3}: {}.", index, truncate(&created, options.trunc_size)),
         }
     }
 
@@ -429,7 +337,10 @@ fn try_do(
             "{} layers found in cache - not enough layers to bisect.",
             layers.len()
         );
-        std::process::exit(-1);
+        return Err(Error::new(
+            std::io::ErrorKind::Other,
+            "no cached layers found!",
+        ));
     }
 
     let results = get_changes(layers, &create_and_try_container);
