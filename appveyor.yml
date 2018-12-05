@@ -1,0 +1,64 @@
+environment:
+  APPVEYOR_CACHE_ENTRY_ZIP_ARGS: "-t7z -m0=lzma -mx=9"
+  # image maybe needed by neovim build script
+  image: Visual Studio 2017
+  global:
+  # This is the Rust channel that build jobs will use by default but can be
+  # overridden on a case by case basis down below
+    RUST_VERSION: stable
+
+    # Update this to match the name of your project.
+    CRATE_NAME: docker-bisect
+
+  matrix:
+    # MinGW
+    # CONFIGURATION used by nvim build script
+    - TARGET: i686-pc-windows-gnu
+      CONFIGURATION: MINGW_32
+      RUST_VERSION: stable
+      FUNCTIONALTESTS: true
+    - TARGET: i686-pc-windows-gnu
+      RUST_VERSION: beta
+      FUNCTIONALTESTS: false
+    - TARGET: i686-pc-windows-gnu
+      RUST_VERSION: nightly
+      FUNCTIONALTESTS: false
+
+    # MSVC
+    - TARGET: i686-pc-windows-msvc
+      RUST_VERSION: stable
+      FUNCTIONALTESTS: false
+
+matrix:
+  allow_failures:
+    - RUST_VERSION: beta
+    - RUST_VERSION: nightly
+
+
+install:
+  - ps: >-
+      If ($Env:TARGET -eq 'x86_64-pc-windows-gnu') {
+        $Env:PATH += ';C:\msys64\mingw64\bin'
+      } ElseIf ($Env:TARGET -eq 'i686-pc-windows-gnu') {
+        $Env:PATH += ';C:\msys64\mingw32\bin'
+      }
+  - curl -sSf -o rustup-init.exe https://win.rustup.rs/
+  - rustup-init.exe -y --default-host %TARGET% --default-toolchain %RUST_VERSION%
+  - set PATH=%PATH%;C:\Users\appveyor\.cargo\bin
+  - rustc -Vv
+  - cargo -V
+
+build_script:
+  - cargo build
+
+test_script:
+  - cargo test
+
+cache:
+  - C:\Users\appveyor\.cargo
+  #- target 
+  #- neovim\.deps -> neovim\third-party\**
+  #- neovim\build -> neovim\src\nvim\**
+
+# Building is done in the test phase, so we disable Appveyor's build phase.
+build: Script
