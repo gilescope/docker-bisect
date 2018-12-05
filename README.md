@@ -1,5 +1,7 @@
 # docker-bisect
 
+[![Build status](https://ci.appveyor.com/api/projects/status/8af521nx5s7u14v3/branch/master?svg=true)](https://ci.appveyor.com/project/gilescope/docker-bisect/branch/master)
+
 docker-bisect is inspired by [git-bisect](https://git-scm.com/docs/git-bisect).
 
 The tool will inspect the layers that make up a docker image. For each layer it will run the same command. It reports which layers caused the command to have a different output.
