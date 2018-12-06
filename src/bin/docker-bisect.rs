@@ -49,7 +49,7 @@ fn main() {
         .value_of("truncate")
         .unwrap_or("100")
         .parse()
-        .expect("Can't parse timeout value, expected --timeout=10 ");
+        .expect("Can't parse truncate value, expected --truncate=10 ");
 
     let size = terminal_size();
     if let Some((Width(w), _)) = size {

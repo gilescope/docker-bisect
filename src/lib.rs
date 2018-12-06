@@ -5,13 +5,14 @@ extern crate colored;
 extern crate dockworker;
 extern crate indicatif;
 extern crate rand;
+extern crate nix;
 
 use std::clone::Clone;
 use std::fmt;
-use std::io::{prelude::*, BufReader, Error};
+use std::io::{prelude::*, BufReader, Error, ErrorKind};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use colored::*;
 use dockworker::*;
@@ -227,6 +228,14 @@ impl DockerContainer {
     }
 }
 
+struct Guard<'a> { buf: &'a mut Vec<u8>, len: usize }
+
+impl<'a> Drop for Guard<'a> {
+    fn drop(&mut self) {
+        unsafe { self.buf.set_len(self.len); }
+    }
+}
+
 impl ContainerAction for DockerContainer {
     fn try_container(&self, container_id: &str) -> String {
         let docker: Docker = Docker::connect_with_defaults().expect("docker daemon running?");
@@ -263,19 +272,41 @@ impl ContainerAction for DockerContainer {
         };
 
         let timeout = Duration::from_secs(self.timeout_in_seconds as u64);
-        //TODO stop sleeping if container is finished.
-        std::thread::sleep(timeout);
-        self.pb.inc(1);
 
         let mut container_output = String::new();
 
+        let now = SystemTime::now();
+        let timeout_time = now + timeout;
+
         let result = docker.log_container(&container_name, &log_options);
         if let Ok(result) = result {
-            let mut line_reader = BufReader::new(result);
-            let _size = line_reader.read_to_string(&mut container_output);
+            let mut r = result;
+
+            let reservation_size = 32;
+            let mut buf = Vec::<u8>::new();
+            {
+                let mut g = Guard { len: buf.len(), buf: &mut buf };
+                loop {
+                    if g.len == g.buf.len() {
+                        g.buf.resize(g.len + reservation_size, 0);
+                    }
+                    match r.read(&mut g.buf[g.len..]) {
+                        Ok(0) => { break; }
+                        Ok(n) => g.len += n,
+                        Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+                        Err(_e) => { break; }
+                    }
+                    if SystemTime::now() > timeout_time {
+                        break;
+                    }
+                }
+            }
+
+            container_output = String::from_utf8_lossy(&buf).to_string();
         }
-        //TODO stop could be async...
-        let _stop_result = docker.stop_container(&container.id, timeout);
+
+        self.pb.inc(1);
+        let _stop_result = docker.kill_container(&container.id, dockworker::signal::Signal::from(nix::sys::signal::Signal::SIGTERM));
         container_output
     }
 
