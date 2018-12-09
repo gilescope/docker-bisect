@@ -5,11 +5,10 @@ extern crate colored;
 extern crate dockworker;
 extern crate indicatif;
 extern crate rand;
-extern crate nix;
 
 use std::clone::Clone;
 use std::fmt;
-use std::io::{prelude::*, BufReader, Error, ErrorKind};
+use std::io::{prelude::*, Error, ErrorKind};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -306,7 +305,7 @@ impl ContainerAction for DockerContainer {
         }
 
         self.pb.inc(1);
-        let _stop_result = docker.kill_container(&container.id, dockworker::signal::Signal::from(nix::sys::signal::Signal::SIGTERM));
+        let _stop_result = docker.stop_container(&container.id, timeout);
         container_output
     }
 
