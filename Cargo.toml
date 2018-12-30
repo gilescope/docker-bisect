@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Giles Cope <gilescope@gmail.com>"]
 
 [dependencies]
-dockworker={ branch="feature/logs", git="https://github.com/gilescope/dockworker.git" }
+dockworker="0.0.8"
 clap="2.32"
 rand="0.6"
 colored = "1.6"
