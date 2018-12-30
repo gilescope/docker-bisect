@@ -6,6 +6,10 @@ docker-bisect is inspired by [git-bisect](https://git-scm.com/docs/git-bisect).
 
 The tool will inspect the layers that make up a docker image. For each layer it will run the same command. It reports which layers caused the command to have a different output.
 
+## Install
+
+`cargo install docker-bisect`
+
 ## Usage
 
 ```
