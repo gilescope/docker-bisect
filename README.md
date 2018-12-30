@@ -28,4 +28,4 @@ ARGS:
 
 ## License
 
-Same duel license as Rust: You can use Apache or MIT.
+Public Domain: You can use Unlicense or MIT.
